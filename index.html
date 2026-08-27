@@ -1557,6 +1557,79 @@
   </div>
 
   <script>
+    // ── IndexedDB Helper (ChatbotDB) ───────────
+    const DB_NAME = 'ChatbotDB';
+    const DB_VERSION = 1;
+    const STORE_NAME = 'keyval';
+
+    function openDB() {
+      return new Promise((resolve, reject) => {
+        const request = indexedDB.open(DB_NAME, DB_VERSION);
+        request.onupgradeneeded = (e) => {
+          const db = e.target.result;
+          if (!db.objectStoreNames.contains(STORE_NAME)) {
+            db.createObjectStore(STORE_NAME);
+          }
+        };
+        request.onsuccess = (e) => resolve(e.target.result);
+        request.onerror = (e) => reject(e.target.error);
+      });
+    }
+
+    let dbPromise = null;
+    function getDB() {
+      if (!dbPromise) {
+        dbPromise = openDB();
+      }
+      return dbPromise;
+    }
+
+    async function dbGet(key) {
+      try {
+        const db = await getDB();
+        return new Promise((resolve, reject) => {
+          const tx = db.transaction(STORE_NAME, 'readonly');
+          const store = tx.objectStore(STORE_NAME);
+          const req = store.get(key);
+          req.onsuccess = () => resolve(req.result !== undefined ? req.result : null);
+          req.onerror = () => reject(req.error);
+        });
+      } catch (e) {
+        console.warn('[IndexedDB] dbGet error:', key, e);
+        return null;
+      }
+    }
+
+    async function dbSet(key, value) {
+      try {
+        const db = await getDB();
+        return new Promise((resolve, reject) => {
+          const tx = db.transaction(STORE_NAME, 'readwrite');
+          const store = tx.objectStore(STORE_NAME);
+          const req = store.put(value, key);
+          req.onsuccess = () => resolve();
+          req.onerror = () => reject(req.error);
+        });
+      } catch (e) {
+        console.warn('[IndexedDB] dbSet error:', key, e);
+      }
+    }
+
+    async function dbDel(key) {
+      try {
+        const db = await getDB();
+        return new Promise((resolve, reject) => {
+          const tx = db.transaction(STORE_NAME, 'readwrite');
+          const store = tx.objectStore(STORE_NAME);
+          const req = store.delete(key);
+          req.onsuccess = () => resolve();
+          req.onerror = () => reject(req.error);
+        });
+      } catch (e) {
+        console.warn('[IndexedDB] dbDel error:', key, e);
+      }
+    }
+
     // ── Default Config (YOUR API) ──────────────
     const DEFAULT_CONFIG = {
       baseUrl: 'https://tokenhub-intl.tencentcloudmaas.com/v1',
@@ -1722,10 +1795,13 @@
       lb.classList.add('open');
     }
     // ── Load / Save Config ─────────────────────
-    function loadConfig() {
+    async function loadConfig() {
       try {
-        const saved = localStorage.getItem('chatbot_config');
-        if (saved) config = { ...DEFAULT_CONFIG, ...JSON.parse(saved) };
+        const saved = await dbGet('chatbot_config');
+        if (saved) {
+          const parsed = typeof saved === 'string' ? JSON.parse(saved) : saved;
+          config = { ...DEFAULT_CONFIG, ...parsed };
+        }
         // ── Migrasi legacy: contextWindow angka custom (mis. 48000) → 'custom' + contextWindowCustom
         try {
           const presetVals = ['8192','16384','32768','65536','128000','200000'];
@@ -1739,8 +1815,8 @@
         } catch(e){}
       } catch (e) {}
     }
-    function saveConfig() {
-      localStorage.setItem('chatbot_config', JSON.stringify(config));
+    async function saveConfig() {
+      await dbSet('chatbot_config', config);
     }
 
     // ── Context Management — Helpers ───────────
@@ -2064,11 +2140,11 @@
     let currentSessionId = null;
     function genId(){ return Date.now().toString(36)+Math.random().toString(36).slice(2,7); }
     function fmtDate(ts){ try{ return new Date(ts).toLocaleString('id-ID',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'});}catch(e){ return ''; } }
-    function saveSessions(){
+    async function saveSessions(){
       if(!config.memoryEnabled) return;
       try{
         const toSave = sessions.map(s=>{
-          // Kompres gambar untuk localStorage: simpan versi terkompresi kecil (sudah 1280px) tapi batasi total
+          // Kompres gambar untuk IndexedDB: simpan versi terkompresi kecil (sudah 1280px) tapi batasi total
           let msgs = s.messages || [];
           // Hitung size stringify, jika >3.5MB, buang dataUrl besar pada pesan lama (keep only last 2 vision messages)
           try{
@@ -2088,13 +2164,13 @@
           }catch(e){}
           return { ...s, messages: msgs };
         });
-        localStorage.setItem(SESSIONS_KEY, JSON.stringify(toSave));
-        if(currentSessionId) localStorage.setItem(ACTIVE_SESSION_KEY, currentSessionId);
+        await dbSet(SESSIONS_KEY, toSave);
+        if(currentSessionId) await dbSet(ACTIVE_SESSION_KEY, currentSessionId);
       }catch(e){
         // fallback: coba tanpa gambar
         try{
           const fallback = sessions.map(s=> ({ ...s, messages: (s.messages||[]).map(m=> Array.isArray(m.content) ? { role:m.role, content: getMessageText(m)||'[gambar]' } : m) }));
-          localStorage.setItem(SESSIONS_KEY, JSON.stringify(fallback));
+          await dbSet(SESSIONS_KEY, fallback);
         }catch(e2){ console.warn('saveSessions fallback fail', e2); }
       }
     }
@@ -2160,7 +2236,7 @@
             sess.title=title;
             sess._titleSource='ai';
             // simpan & render — pakai saveSessions yang menghormati memoryEnabled
-            try{ if(config.memoryEnabled) localStorage.setItem(SESSIONS_KEY, JSON.stringify(sessions)); }catch(e){}
+            try{ if(config.memoryEnabled) await dbSet(SESSIONS_KEY, sessions); }catch(e){}
             renderSidebar();
           }
         }
@@ -2232,9 +2308,9 @@
     }
     // wrappers legacy agar panggilan lama tidak error
     function saveHistory(){ persistCurrentSession(); }
-    function clearHistory(){
-      try{ localStorage.removeItem(HISTORY_KEY);}catch(e){}
-      try{ localStorage.removeItem(SESSIONS_KEY); localStorage.removeItem(ACTIVE_SESSION_KEY);}catch(e){}
+    async function clearHistory(){
+      try{ await dbDel(HISTORY_KEY);}catch(e){}
+      try{ await dbDel(SESSIONS_KEY); await dbDel(ACTIVE_SESSION_KEY);}catch(e){}
     }
     function restoreHistory(){ /* digantikan restoreSessions() */ }
     // ── DOM Refs ───────────────────────────────
@@ -2282,7 +2358,7 @@
       }
       scrollToBottom();
     }
-    function switchSession(id){
+    async function switchSession(id){
       if(isGenerating && abortController) abortController.abort();
       // save current
       persistCurrentSession();
@@ -2292,7 +2368,7 @@
       messages = target.messages ? [...target.messages] : [];
       // keep reference synced so pushes affect session
       target.messages = messages;
-      try{ localStorage.setItem(ACTIVE_SESSION_KEY, currentSessionId);}catch(e){}
+      try{ await dbSet(ACTIVE_SESSION_KEY, currentSessionId);}catch(e){}
       renderChat();
       renderSidebar();
       closeSidebar();
@@ -2383,7 +2459,7 @@
         historyList.appendChild(btn);
       });
     }
-    function loadSessions(){
+    async function loadSessions(){
       if(!config.memoryEnabled){
         // memory off: single ephemeral session
         sessions=[];
@@ -2392,18 +2468,18 @@
         return;
       }
       try{
-        const raw=localStorage.getItem(SESSIONS_KEY);
-        const act=localStorage.getItem(ACTIVE_SESSION_KEY);
+        const raw = await dbGet(SESSIONS_KEY);
+        const act = await dbGet(ACTIVE_SESSION_KEY);
         if(raw){
-          const parsed=JSON.parse(raw);
+          const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
           if(Array.isArray(parsed)) sessions=parsed;
         }
         // migrate legacy single history if no sessions yet
         if(sessions.length===0){
-          const legacy=localStorage.getItem(HISTORY_KEY);
+          const legacy = await dbGet(HISTORY_KEY);
           if(legacy){
             try{
-              const arr=JSON.parse(legacy);
+              const arr = typeof legacy === 'string' ? JSON.parse(legacy) : legacy;
               if(Array.isArray(arr) && arr.length>0){
                 const msgs=arr.filter(m=> (m.role==='user'||m.role==='assistant') && typeof m.content==='string');
                 if(msgs.length>0){
@@ -2412,8 +2488,8 @@
                   const title= first ? first.content.trim().slice(0,40)+(first.content.trim().length>40?'…':'') : 'Chat lama';
                   sessions=[{id,title,preview:msgs[msgs.length-1].content.trim().slice(0,60),updatedAt:Date.now(),messages:msgs}];
                   currentSessionId=id;
-                  saveSessions();
-                  localStorage.removeItem(HISTORY_KEY);
+                  await saveSessions();
+                  await dbDel(HISTORY_KEY);
                 }
               }
             }catch(e){}
@@ -2457,7 +2533,7 @@
             sessions=sessions.filter(s=> !(s.messages.length===0 && isPlaceholderTitle(s.title) && s.id!==keepId));
             if(sessions.length!==before) migrated=true;
           }
-          if(migrated) saveSessions();
+          if(migrated) await saveSessions();
         }catch(e){ console.warn('migrate titles',e); }
         if(sessions.length>0 && currentSessionId){
           const cur=getCurrentSession();
@@ -2469,7 +2545,7 @@
           const ns={id:currentSessionId,title:'Chat baru',preview:'—',updatedAt:Date.now(),messages:[]};
           sessions=[ns];
           messages=ns.messages;
-          saveSessions();
+          await saveSessions();
         }
       }catch(e){
         sessions=[];
@@ -2925,10 +3001,12 @@
       setTimeout(()=> wrapper.classList.remove('copied'), 900);
       if(success){
         showMathToast('✅ <b>Rumus tersalin</b>');
-        if(!localStorage.getItem('math_copy_hint_shown')){
-          localStorage.setItem('math_copy_hint_shown','1');
-          setTimeout(()=> showMathToast('💡 <b>Tips Word:</b> jika menempel sebagai teks, pakai <b>Paste Special → HTML</b> atau paste di dalam Equation (<b>Alt+=</b>)'), 1800);
-        }
+        dbGet('math_copy_hint_shown').then(hintShown => {
+          if(!hintShown){
+            dbSet('math_copy_hint_shown', '1');
+            setTimeout(()=> showMathToast('💡 <b>Tips Word:</b> jika menempel sebagai teks, pakai <b>Paste Special → HTML</b> atau paste di dalam Equation (<b>Alt+=</b>)'), 1800);
+          }
+        });
       } else {
         showMathToast('❌ Gagal menyalin rumus');
       }
@@ -3986,18 +4064,18 @@
     });
     // hapus semua history
     const clearAllBtn=document.getElementById('clear-all-btn');
-    if(clearAllBtn) clearAllBtn.addEventListener('click', ()=>{
+    if(clearAllBtn) clearAllBtn.addEventListener('click', async ()=>{
       if(!confirm('Hapus SEMUA riwayat chat?')) return;
       if(isGenerating && abortController) abortController.abort();
       sessions=[];
-      localStorage.removeItem(SESSIONS_KEY);
-      localStorage.removeItem(ACTIVE_SESSION_KEY);
-      localStorage.removeItem(HISTORY_KEY);
+      await dbDel(SESSIONS_KEY);
+      await dbDel(ACTIVE_SESSION_KEY);
+      await dbDel(HISTORY_KEY);
       currentSessionId=genId();
       const ns={id:currentSessionId,title:'Chat baru',preview:'—',updatedAt:Date.now(),messages:[]};
       sessions=[ns];
       messages=ns.messages;
-      saveSessions();
+      await saveSessions();
       renderChat();
       renderSidebar();
     });
@@ -4294,7 +4372,7 @@
     });
 
     // ── Save Settings ──────────────────────────
-    document.getElementById('settings-save').addEventListener('click', () => {
+    document.getElementById('settings-save').addEventListener('click', async () => {
       const newConfig = readFormConfig();
       // ── Poin 7: validasi sebelum save ──
       const errors = [];
@@ -4319,7 +4397,7 @@
       const wasEnabled = config.memoryEnabled;
       // If memory was turned off, forget the saved history
       if (wasEnabled && !newConfig.memoryEnabled) {
-        clearHistory();
+        await clearHistory();
         sessions=[];
         currentSessionId=null;
         messages=[];
@@ -4327,7 +4405,7 @@
         renderSidebar();
       }
       config = newConfig;
-      saveConfig();
+      await saveConfig();
       if(config.memoryEnabled){
         if(sessions.length===0){
           ensureSession();
@@ -4355,14 +4433,14 @@
         btn.title = 'Ganti ke Mode Terang';
       }
     }
-    function applyTheme(theme){
+    async function applyTheme(theme){
       document.documentElement.setAttribute('data-theme', theme);
-      localStorage.setItem(THEME_KEY, theme);
+      await dbSet(THEME_KEY, theme);
       updateThemeBtn(theme);
       try{ rerenderAllMermaidsForTheme(); }catch(e){ console.warn('mermaid theme rerender',e); }
     }
-    (function initTheme(){
-      const saved = localStorage.getItem(THEME_KEY);
+    async function initTheme(){
+      const saved = await dbGet(THEME_KEY);
       if(saved === 'light' || saved === 'dark'){
         applyTheme(saved);
       } else if(window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches){
@@ -4370,24 +4448,28 @@
       } else {
         applyTheme('dark');
       }
-    })();
+    }
     document.getElementById('theme-btn')?.addEventListener('click', ()=>{
       const cur = document.documentElement.getAttribute('data-theme') || 'dark';
       applyTheme(cur === 'dark' ? 'light' : 'dark');
     });
 
     // ── Init ───────────────────────────────────
-    loadConfig();
-    loadSessions();
-    renderSidebar();
-    renderChat();
-    updateStatusFromConfig();
-    try{ updateContextBar(); updateContextEstimateBox(); }catch(e){}
+    async function initApp() {
+      await loadConfig();
+      await loadSessions();
+      await initTheme();
+      renderSidebar();
+      renderChat();
+      updateStatusFromConfig();
+      try{ updateContextBar(); updateContextEstimateBox(); }catch(e){}
 
-    // Show settings on first visit if no API key
-    if (!config.apiKey) {
-      setTimeout(openSettings, 600);
+      // Show settings on first visit if no API key
+      if (!config.apiKey) {
+        setTimeout(openSettings, 600);
+      }
     }
+    initApp();
   </script>
 </body>
 </html>
