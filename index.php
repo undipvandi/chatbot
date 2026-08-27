@@ -1833,6 +1833,8 @@
       out.push(...recent);
       return { messages: out, wasCompacted:true, olderCount: older.length, strategy:'truncate', savedTokens: saved, notice };
     }
+    const PROXY_API_URL = 'api.php';
+
     async function summarizeCompaction(raw, keep){
       const { sys, older, recent } = splitForCompaction(raw, keep);
       if(!older || older.length===0) return { messages: raw, wasCompacted:false, olderCount:0, strategy:'summarize', savedTokens:0 };
@@ -1848,22 +1850,25 @@
         return `${role}${imgNote}: ${txt}`;
       }).join('\n\n---\n\n');
       const prompt = `Ringkas percakapan berikut secara sangat padat dalam Bahasa Indonesia. Pertahankan: fakta penting, nama/entitas, keputusan, preferensi user, konteks yang dibutuhkan untuk melanjutkan percakapan. Jangan tambahkan informasi baru/halu. Maksimal 350 token. Format ringkas bullet points.\n\nPERCAKAPAN LAMA (${older.length} pesan):\n${olderText}`;
-      const url = getApiUrl();
       const controller = new AbortController();
       const timeoutId = setTimeout(()=> controller.abort(), 15000);
       try{
-        const resp = await fetch(url, {
+        const resp = await fetch(PROXY_API_URL, {
           method:'POST',
-          headers:{ 'Content-Type':'application/json', 'Authorization': `Bearer ${config.apiKey.trim()}` },
+          headers:{ 'Content-Type':'application/json' },
           body: JSON.stringify({
-            model: config.model,
-            messages: [
-              { role:'system', content:'You are a concise conversation summarizer. Summarize accurately without hallucination.' },
-              { role:'user', content: prompt }
-            ],
-            max_tokens: 512,
-            temperature: 0.2,
-            stream: false
+            baseUrl: config.baseUrl,
+            apiKey: config.apiKey.trim(),
+            payload: {
+              model: config.model,
+              messages: [
+                { role:'system', content:'You are a concise conversation summarizer. Summarize accurately without hallucination.' },
+                { role:'user', content: prompt }
+              ],
+              max_tokens: 512,
+              temperature: 0.2,
+              stream: false
+            }
           }),
           signal: controller.signal
         });
@@ -2137,17 +2142,20 @@
       try{
         const recent=sess.messages.slice(0,6).map(m=>`${m.role==='user'?'User':'Assistant'}: ${getMessageText(m).slice(0,300)}${getMessageImages(m).length?' [gambar]':''}`).join('\n');
         const prompt=`Buatkan judul chat 3-5 kata yang sangat ringkas, relevan, menarik untuk percakapan ini. Jawab HANYA judulnya tanpa tanda kutip, tanpa awalan "Judul:".\n\n${recent}`;
-        const url=getApiUrl();
-        const resp=await fetch(url,{
+        const resp=await fetch(PROXY_API_URL,{
           method:'POST',
-          headers:{'Content-Type':'application/json','Authorization':`Bearer ${String(config.apiKey).trim()}`},
+          headers:{'Content-Type':'application/json'},
           body: JSON.stringify({
-            model: config.model,
-            messages:[{role:'system',content:'Kamu adalah pembuat judul chat. Balas hanya judul 3-5 kata tanpa kutip.'},{role:'user',content: prompt}],
-            max_tokens: 20,
-            temperature: 0.7,
-            ...(config.topP!==null&&config.topP!==undefined?{top_p:config.topP}:{}),
-            stream:false
+            baseUrl: config.baseUrl,
+            apiKey: String(config.apiKey).trim(),
+            payload: {
+              model: config.model,
+              messages:[{role:'system',content:'Kamu adalah pembuat judul chat. Balas hanya judul 3-5 kata tanpa kutip.'},{role:'user',content: prompt}],
+              max_tokens: 20,
+              temperature: 0.7,
+              ...(config.topP!==null&&config.topP!==undefined?{top_p:config.topP}:{}),
+              stream:false
+            }
           })
         });
         if(!resp.ok) throw new Error('title gen failed '+resp.status);
@@ -3508,8 +3516,7 @@
       try {
         const apiMessages = (compactInfo && compactInfo.messages) ? compactInfo.messages : buildMessages();
         const useStream = config.stream;
-        const apiUrl = getApiUrl();
-        console.log('[Chatbot] POST', apiUrl, { model: config.model, stream: useStream, messages: apiMessages.length });
+        console.log('[Chatbot] POST', PROXY_API_URL, { model: config.model, stream: useStream, messages: apiMessages.length });
         const requestBody = {
           model: config.model,
           messages: apiMessages,
@@ -3528,14 +3535,16 @@
         if (config.reasoningEffort) {
           requestBody.reasoning_effort = config.reasoningEffort;
         }
-        const headers = {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${config.apiKey}`,
-        };
-        const response = await fetch(apiUrl, {
+        const response = await fetch(PROXY_API_URL, {
           method: 'POST',
-          headers,
-          body: JSON.stringify(requestBody),
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            baseUrl: config.baseUrl,
+            apiKey: config.apiKey,
+            payload: requestBody
+          }),
           signal: abortController.signal,
         });
         if (!response.ok) {
@@ -3772,7 +3781,6 @@
               addContextNotice(`🔄 Retry: context overflow — memadatkan ulang & mengirim ulang (${needRetry.olderCount} pesan lama dipotong)…`);
               // retry request sekali dengan pesan ter-compact
               const retryMsgs = needRetry.messages;
-              const apiUrl2 = getApiUrl();
               const useStream2 = config.stream;
               const body2 = {
                 model: config.model,
@@ -3783,7 +3791,16 @@
                 ...(config.topP!==null&&config.topP!==undefined ? {top_p: config.topP}:{}),
                 ...(config.reasoningEffort ? {reasoning_effort: config.reasoningEffort}:{})
               };
-              const resp2 = await fetch(apiUrl2, { method:'POST', headers:{'Content-Type':'application/json','Authorization':`Bearer ${config.apiKey}`}, body: JSON.stringify(body2), signal: abortController.signal });
+              const resp2 = await fetch(PROXY_API_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  baseUrl: config.baseUrl,
+                  apiKey: config.apiKey,
+                  payload: body2
+                }),
+                signal: abortController.signal
+              });
               if(resp2.ok){
                 lastCompaction = { ...needRetry, ts: Date.now() };
                 updateContextBar();
@@ -4248,27 +4265,23 @@
       testResult.textContent = '🔄 Tunggu…';
 
       try {
-        let base = testCfg.baseUrl.replace(/\/+$/, '');
-        if (base.endsWith('/chat/completions')) {
-          // already full URL
-        } else {
-          base += '/chat/completions';
-        }
-
-        const response = await fetch(base, {
+        const response = await fetch(PROXY_API_URL, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'Authorization': `Bearer ${testCfg.apiKey}`,
           },
           body: JSON.stringify({
-            model: testCfg.model,
-            messages: [{ role: 'user', content: 'Hi' }],
-            max_tokens: 10,
-            stream: false,
-            ...(testCfg.topP!==null&&testCfg.topP!==undefined ? { top_p: testCfg.topP } : {}),
-            ...(testCfg.temperature!==null&&testCfg.temperature!==undefined ? { temperature: testCfg.temperature } : {}),
-            ...(testCfg.reasoningEffort ? { reasoning_effort: testCfg.reasoningEffort } : {}),
+            baseUrl: testCfg.baseUrl,
+            apiKey: testCfg.apiKey,
+            payload: {
+              model: testCfg.model,
+              messages: [{ role: 'user', content: 'Hi' }],
+              max_tokens: 10,
+              stream: false,
+              ...(testCfg.topP!==null&&testCfg.topP!==undefined ? { top_p: testCfg.topP } : {}),
+              ...(testCfg.temperature!==null&&testCfg.temperature!==undefined ? { temperature: testCfg.temperature } : {}),
+              ...(testCfg.reasoningEffort ? { reasoning_effort: testCfg.reasoningEffort } : {}),
+            }
           }),
         });
 
