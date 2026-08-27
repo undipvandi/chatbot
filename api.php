@@ -69,6 +69,16 @@ $isStream = !empty($payload['stream']);
 @set_time_limit(0);
 @ini_set('max_execution_time', '0');
 
+// Disable output buffering & compression for SSE streaming
+if ($isStream) {
+    @ini_set('zlib.output_compression', 'Off');
+    @ini_set('output_buffering', 'Off');
+    @ob_implicit_flush(true);
+    while (ob_get_level() > 0) {
+        @ob_end_flush();
+    }
+}
+
 // Initialize cURL
 $ch = curl_init();
 
@@ -86,13 +96,6 @@ curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
 curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, 2);
 curl_setopt($ch, CURLOPT_TIMEOUT, 300);
 
-// Disable PHP output buffering for streaming
-if ($isStream) {
-    while (ob_get_level() > 0) {
-        @ob_end_flush();
-    }
-}
-
 $headersSent = false;
 
 curl_setopt($ch, CURLOPT_WRITEFUNCTION, function($curl, $chunk) use (&$headersSent, $isStream) {
@@ -107,6 +110,7 @@ curl_setopt($ch, CURLOPT_WRITEFUNCTION, function($curl, $chunk) use (&$headersSe
             header('Cache-Control: no-cache, no-transform');
             header('Connection: keep-alive');
             header('X-Accel-Buffering: no');
+            header('Content-Encoding: none');
         } else {
             header('Content-Type: application/json; charset=utf-8');
         }

@@ -3692,12 +3692,44 @@
                 }
                 const contentDelta = delta.content ?? delta.text ?? choice.text ?? '';
                 if (contentDelta) {
-                  // First content token means reasoning is done (model finished thinking)
-                  if (thinkingShown && !thinkingDone) {
-                    finalizeThinking();
-                  }
                   fullContent += contentDelta;
-                  throttledRenderAnswer();
+                  // Dynamic live parsing for <think>...</think> tags inside contentDelta stream
+                  let curReasoning = reasoningText;
+                  let curAnswer = fullContent;
+                  const thinkMatch = fullContent.match(/<(think|thinking)>([\s\S]*?)(?:<\/(think|thinking)>|$)/i);
+                  if (thinkMatch) {
+                    hasReasoning = true;
+                    showThinking();
+                    const thinkContent = thinkMatch[2];
+                    if (!reasoningText) {
+                      curReasoning = thinkContent;
+                    }
+                    if (fullContent.match(/<\/(think|thinking)>/i)) {
+                      if (thinkingShown && !thinkingDone) finalizeThinking();
+                      curAnswer = fullContent.replace(/<(think|thinking)>[\s\S]*?<\/(think|thinking)>/gi, '').trim();
+                    } else {
+                      curAnswer = '';
+                    }
+                  } else {
+                    if (thinkingShown && !thinkingDone) {
+                      finalizeThinking();
+                    }
+                  }
+
+                  if (curReasoning && curReasoning !== reasoningText) {
+                    reasoningText = curReasoning;
+                    throttledRenderReasoning();
+                  }
+
+                  // Render answer content
+                  if (curAnswer !== undefined) {
+                    if (mathDelimitersBalanced(curAnswer)) {
+                      renderContent(curAnswer, answerDiv);
+                    } else {
+                      try { answerDiv.innerHTML = marked.parse(curAnswer); } catch(e) { answerDiv.textContent = curAnswer; }
+                    }
+                    scrollToBottom();
+                  }
                 }
               } catch (e) {
                 // skip malformed chunks
