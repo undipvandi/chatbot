@@ -3756,7 +3756,7 @@
           persistCurrentSession();
           addMessage('assistant', reply, opts);
         }
-        updateStatus(true, `Connected — ${config.model}`);
+        updateStatus(true, `Terhubung — ${config.model}`);
       } catch (err) {
         removeTypingIndicator();
         // Auto-retry: jika error context_length / token overflow dan belum compact, coba compact lalu retry sekali
@@ -3812,7 +3812,7 @@
                   addTypingIndicator(); const data2=await resp2.json(); removeTypingIndicator();
                   const mm2=data2.choices?.[0]?.message||{}; let rep2=mm2.content??data2.choices?.[0]?.text??'⚠️ No response'; let rs2b=getMessageReasoning(mm2)||getMessageReasoning(data2.choices?.[0])||data2.reasoning_content||data2.reasoning||null; if(!rs2b && typeof rep2==='string'){ const ex=extractThinkTag(rep2); if(ex){ rs2b=ex.reasoning; rep2=ex.content; } } const el2=Date.now()-thinkingStartTs2; const opts2=rs2b?{reasoning:rs2b, reasoningDuration:el2}:null; messages.push({role:'assistant', content:rep2, ...(rs2b?{reasoning_content:rs2b, reasoningTime:el2}:{})}); persistCurrentSession(); addMessage('assistant', rep2, opts2);
                 }
-                updateStatus(true, `Connected — ${config.model}`); updateContextBar();
+                updateStatus(true, `Terhubung — ${config.model}`); updateContextBar();
                 // sukses retry → jangan tampilkan error
                 isGenerating=false; sendBtn.style.display='flex'; stopBtn.style.display='none'; abortController=null; const s2=document.getElementById('streaming-msg'); if(s2) s2.removeAttribute('id'); return;
               }
